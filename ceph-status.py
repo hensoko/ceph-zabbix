@@ -57,6 +57,7 @@ states_count = { "creating": 0,
         "pgtotal": 0,
         "waitBackfill": 0,
         "mon": 0,
+        "rados_objects": 0,
         "rados_total": 0,
         "rados_used": 0,
         "rados_free": 0,
@@ -155,33 +156,24 @@ def GetOsd():
 '''Get all information about cluster utilisation'''
 def SpaceRados():
     import subprocess 
-        p = subprocess.Popen([rados, 'df'], stdout=subprocess.PIPE,
+        p = subprocess.Popen([rados, 'df', '-f', 'json-pretty'], stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE)
-
-        g = subprocess.Popen(['grep', 'total'], 
-                stdin = p.stdout, stdout = subprocess.PIPE)
-
         try:
-            out, err = g.communicate()
+            out, err = p.communicate()
 
         except ValueError:
             print 'Cannot execute command'
 
+        data = json.loads(out)
 
-        data = ' '.join(out.split())
-        sdata = data.split(' ')
-
-        # Split data usage
-        #TODO: This horrible way, but will stay that way for now 
-        # used: 2 - avail: 6 - total space: 9
-        states_count['rados_used'] = sdata[2]
-        states_count['rados_free'] = sdata[6]
-        states_count['rados_total'] = sdata[9]
+        states_count['rados_objects'] = data['total_objects']
+        states_count['rados_used'] = data['total_used']
+        states_count['rados_free'] = data['total_avail']
+        states_count['rados_total'] = data['total_space']
 
 '''Get pg stat'''
 def Info():
     global ceph, rados
-        cmd_params ='pg stat -f json-pretty'
 
         import subprocess 
         p = subprocess.Popen([ceph, 'pg', 'stat', '-f', 'json-pretty'], stdout=subprocess.PIPE,
@@ -196,11 +188,11 @@ def Info():
 
         # Foreach all pgs state to count how is the values
         # possible values: http://ceph.com/docs/master/rados/operations/pg-states/
-        for s in data['pg_stats']:
-            states = s['state'].split('+')
+        for s in data['num_pg_by_state']:
+            states = s['name'].split('+')
                 for state in states:
                     if state in states_count:
-                        states_count[state] = states_count[state] + 1
+                        states_count[state] = states_count[state] + s['num']
                     else:
                         states_count.append(state)
 
@@ -209,23 +201,19 @@ def Info():
         else:
             states_count['pgstat'] = 1
 
-        states_count['pgtotal'] = len(data['pg_stats'])
-        states_count['pg_stats'] = data['pg_stats'][0]['state']
+        states_count['pgtotal'] = data['num_pgs']
 
-        pgdegraded = data['pg_stats_sum']['stat_sum']['num_objects_degraded']
-        pgobjects = data['pg_stats_sum']['stat_sum']['num_objects']
+        states_count['rdbps'] = 0
+        if 'read_bytes_sec' in data:
+            states_count['rdbps'] = data['read_bytes_sec'] * 8
 
-        degraded_percent = percentUtil(pgdegraded, pgobjects)
+        states_count['wrbps'] = 0
+        if 'write_bytes_sec' in data:
+            states_count['wrbps'] = data['write_bytes_sec'] * 8
 
-        states_count['pgdegraded'] = pgdegraded
-        states_count['degraded_percent'] = degraded_percent
-        states_count['pgunfound'] = data['pg_stats_sum']['stat_sum']['num_objects_unfound']
-
-        # TODO: Verify if pg_stat_delta is the correct values show
-        states_count['rdbps'] = data['pg_stats_delta']['stat_sum']['num_read']
-        states_count['wrbps'] = data['pg_stats_delta']['stat_sum']['num_write']
-        states_count['ops'] = data['pg_stats_delta']['stat_sum']['num_write']
-        ops = data['pg_stats_delta']['stat_sum']['num_read']
+        states_count['ops'] = 0
+        if 'io_sec' in data:
+            states_count['ops'] = data['io_sec'] * 8
 
 '''Main'''
 def main():
